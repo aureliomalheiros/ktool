@@ -49,4 +49,3 @@ func (k *KubeClient) Config() *api.Config {
 func (k *KubeClient) Path() string {
 	return k.path
 }
-

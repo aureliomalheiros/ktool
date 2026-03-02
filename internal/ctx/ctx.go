@@ -60,7 +60,7 @@ func SwitchContext(kc *kube.KubeClient, name string) error {
 
 func SelectContextInteractive(kc *kube.KubeClient) error {
 	contexts, current := ListContexts(kc)
-	
+
 	var keys []string
 	for k := range contexts {
 		keys = append(keys, k)
@@ -99,7 +99,7 @@ func SelectContextInteractive(kc *kube.KubeClient) error {
 
 func PrintContexts(kc *kube.KubeClient) {
 	contexts, current := ListContexts(kc)
-	
+
 	var keys []string
 	for k := range contexts {
 		keys = append(keys, k)
