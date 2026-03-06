@@ -40,18 +40,14 @@ func NewKubeClient() (*KubeClient, error) {
 	}, nil
 }
 
-// Config returns the underlying api.Config for advanced use. It is safe for read-only
-// access; modifications should be followed by writing back via other helpers.
 func (k *KubeClient) Config() *api.Config {
 	return k.config
 }
 
-// Path returns the path to the kubeconfig file used by the client.
 func (k *KubeClient) Path() string {
 	return k.path
 }
 
-// Clientset returns a Kubernetes clientset for making API calls.
 func (k *KubeClient) Clientset() (*kubernetes.Clientset, error) {
 	restConfig, err := k.clientConfig.ClientConfig()
 	if err != nil {
