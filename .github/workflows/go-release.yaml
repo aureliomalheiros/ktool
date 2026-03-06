@@ -1,4 +1,5 @@
-name: Release Aragomodoro
+name: Release ktool
+
 on:
   push:
     branches:
@@ -12,7 +13,7 @@ on:
 
 jobs:
   release:
-    name: Generate Release Aragomodoro
+    name: Generate Release ktool
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -25,15 +26,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
       - name: Bump version and push tag
-        uses: anothrNick/github-tag-action@v1 
+        uses: anothrNick/github-tag-action@v1
         id: tag_version
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_PREFIX: v
           PRERELEASE: true
 
-      - name: Create Release Aragomodoro
+      - name: Create Release
         id: create_release
         uses: actions/create-release@v1
         env:
@@ -44,23 +50,15 @@ jobs:
           draft: false
           prerelease: false
 
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: 1.22
-      
-      - name: Install dependencies
-        run: sudo apt update && sudo apt install -y libasound2-dev pkg-config
-
-      - name: Build Aragomodoro binary
+      - name: Build ktool binary
         run: |
           mkdir -p build
-          GOOS=linux GOARCH=amd64 go build -o build/aragomodoro ./cmd
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o build/ktool .
 
       - name: Upload Linux binary to release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.tag_version.outputs.new_tag }}
-          files: build/aragomodoro
+          files: build/ktool
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
