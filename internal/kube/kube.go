@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
 )
@@ -48,4 +49,13 @@ func (k *KubeClient) Config() *api.Config {
 // Path returns the path to the kubeconfig file used by the client.
 func (k *KubeClient) Path() string {
 	return k.path
+}
+
+// Clientset returns a Kubernetes clientset for making API calls.
+func (k *KubeClient) Clientset() (*kubernetes.Clientset, error) {
+	restConfig, err := k.clientConfig.ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build REST config: %w", err)
+	}
+	return kubernetes.NewForConfig(restConfig)
 }
