@@ -1,0 +1,85 @@
+package cmd
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/aureliomalheiros/ktool/internal/kube"
+	"github.com/aureliomalheiros/ktool/internal/logs"
+	"github.com/aureliomalheiros/ktool/internal/ns"
+	"github.com/spf13/cobra"
+)
+
+var (
+	logsFollow    bool
+	logsContainer string
+	logsTail      int64
+	logsSince     string
+	logsNamespace string
+)
+
+var logsCmd = &cobra.Command{
+	Use:   "logs [pod_name]",
+	Short: "View logs from a Kubernetes pod",
+	Long: `View logs from a pod in the current namespace.
+
+Without a pod name, opens an interactive fzf menu to select a pod (requires fzf).
+With a pod name, streams logs directly.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		kc, err := kube.NewKubeClient()
+		if err != nil {
+			fmt.Printf("Error initializing kube client: %v\n", err)
+			os.Exit(1)
+		}
+
+		namespace := logsNamespace
+		if namespace == "" {
+			namespace = ns.CurrentNamespace(kc)
+		}
+
+		if len(args) > 0 {
+			if err := logs.StreamLogs(kc, namespace, args[0], logsContainer, logsFollow, logsTail, logsSince); err != nil {
+				fmt.Printf("Error streaming logs: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+
+		pods, err := logs.ListPods(kc, namespace)
+		if err != nil {
+			fmt.Printf("Error listing pods: %v\n", err)
+			os.Exit(1)
+		}
+
+		if len(pods) == 0 {
+			fmt.Printf("No pods found in namespace %q\n", namespace)
+			return
+		}
+
+		if logs.IsFzfInstalled() {
+			pod, err := logs.SelectPodInteractive(pods)
+			if err != nil {
+				fmt.Printf("Error in interactive selection: %v\n", err)
+				os.Exit(1)
+			}
+			if pod == "" {
+				return
+			}
+			if err := logs.StreamLogs(kc, namespace, pod, logsContainer, logsFollow, logsTail, logsSince); err != nil {
+				fmt.Printf("Error streaming logs: %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			logs.PrintPods(kc, pods, namespace)
+		}
+	},
+}
+
+func init() {
+	logsCmd.Flags().BoolVarP(&logsFollow, "follow", "f", false, "Follow log output")
+	logsCmd.Flags().StringVarP(&logsContainer, "container", "c", "", "Container name (for multi-container pods)")
+	logsCmd.Flags().Int64Var(&logsTail, "tail", 50, "Number of lines from the end of the logs (-1 for all)")
+	logsCmd.Flags().StringVar(&logsSince, "since", "", "Show logs since duration (e.g. 1h, 30m, 5s)")
+	logsCmd.Flags().StringVarP(&logsNamespace, "namespace", "n", "", "Namespace (defaults to current namespace)")
+	rootCmd.AddCommand(logsCmd)
+}
