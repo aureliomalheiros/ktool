@@ -17,7 +17,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ListPods returns the names of all pods in the given namespace.
 func ListPods(kc *kube.KubeClient, namespace string) ([]string, error) {
 	cs, err := kc.Clientset()
 	if err != nil {
@@ -37,7 +36,6 @@ func ListPods(kc *kube.KubeClient, namespace string) ([]string, error) {
 	return names, nil
 }
 
-// PrintPods prints the pod list in a table with their status.
 func PrintPods(kc *kube.KubeClient, pods []string, namespace string) {
 	cs, err := kc.Clientset()
 	if err != nil {
@@ -90,7 +88,6 @@ func PrintPods(kc *kube.KubeClient, pods []string, namespace string) {
 	w.Flush()
 }
 
-// StreamLogs streams logs from the specified pod/container to stdout.
 func StreamLogs(kc *kube.KubeClient, namespace, podName, container string, follow bool, tail int64, since string) error {
 	cs, err := kc.Clientset()
 	if err != nil {
@@ -126,7 +123,21 @@ func StreamLogs(kc *kube.KubeClient, namespace, podName, container string, follo
 	return err
 }
 
-// SelectPodInteractive opens an fzf menu to pick a pod and returns the selected name.
+func FindMatchingPods(kc *kube.KubeClient, namespace, query string) ([]string, error) {
+	all, err := ListPods(kc, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	var matches []string
+	for _, name := range all {
+		if strings.HasPrefix(name, query) || strings.Contains(name, query) {
+			matches = append(matches, name)
+		}
+	}
+	return matches, nil
+}
+
 func SelectPodInteractive(pods []string) (string, error) {
 	fzfCmd := exec.Command("fzf", "--height=40%", "--reverse", "--header=Select Pod", "--info=inline")
 	fzfCmd.Stderr = os.Stderr
@@ -142,7 +153,6 @@ func SelectPodInteractive(pods []string) (string, error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
-// IsFzfInstalled returns true if fzf is available on PATH.
 func IsFzfInstalled() bool {
 	_, err := exec.LookPath("fzf")
 	return err == nil
