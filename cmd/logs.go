@@ -38,7 +38,35 @@ With a pod name, streams logs directly.`,
 		}
 
 		if len(args) > 0 {
-			if err := logs.StreamLogs(kc, namespace, args[0], logsContainer, logsFollow, logsTail, logsSince); err != nil {
+			podName := args[0]
+			matches, err := logs.FindMatchingPods(kc, namespace, podName)
+			if err != nil {
+				fmt.Printf("Error listing pods: %v\n", err)
+				os.Exit(1)
+			}
+			switch len(matches) {
+			case 0:
+				// No match found; pass the name as-is so the API returns a clear error.
+			case 1:
+				podName = matches[0]
+			default:
+				if logs.IsFzfInstalled() {
+					selected, err := logs.SelectPodInteractive(matches)
+					if err != nil {
+						fmt.Printf("Error in interactive selection: %v\n", err)
+						os.Exit(1)
+					}
+					if selected == "" {
+						return
+					}
+					podName = selected
+				} else {
+					fmt.Printf("Multiple pods match %q:\n", podName)
+					logs.PrintPods(kc, matches, namespace)
+					os.Exit(1)
+				}
+			}
+			if err := logs.StreamLogs(kc, namespace, podName, logsContainer, logsFollow, logsTail, logsSince); err != nil {
 				fmt.Printf("Error streaming logs: %v\n", err)
 				os.Exit(1)
 			}
