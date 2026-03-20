@@ -1,6 +1,7 @@
 package logs
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -9,12 +10,14 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
 	"github.com/aureliomalheiros/ktool/internal/kube"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 func ListPods(kc *kube.KubeClient, namespace string) ([]string, error) {
@@ -88,12 +91,7 @@ func PrintPods(kc *kube.KubeClient, pods []string, namespace string) {
 	w.Flush()
 }
 
-func StreamLogs(kc *kube.KubeClient, namespace, podName, container string, follow bool, tail int64, since string) error {
-	cs, err := kc.Clientset()
-	if err != nil {
-		return err
-	}
-
+func podLogOptions(container string, follow bool, tail int64, since string) (*corev1.PodLogOptions, error) {
 	opts := &corev1.PodLogOptions{
 		Container: container,
 		Follow:    follow,
@@ -106,14 +104,32 @@ func StreamLogs(kc *kube.KubeClient, namespace, podName, container string, follo
 	if since != "" {
 		d, err := time.ParseDuration(since)
 		if err != nil {
-			return fmt.Errorf("invalid --since value %q: %w", since, err)
+			return nil, fmt.Errorf("invalid --since value %q: %w", since, err)
 		}
 		sinceSeconds := int64(d.Seconds())
 		opts.SinceSeconds = &sinceSeconds
 	}
 
+	return opts, nil
+}
+
+func openPodLogStream(ctx context.Context, cs *kubernetes.Clientset, namespace, podName string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
 	req := cs.CoreV1().Pods(namespace).GetLogs(podName, opts)
-	stream, err := req.Stream(context.TODO())
+	return req.Stream(ctx)
+}
+
+func StreamLogs(kc *kube.KubeClient, namespace, podName, container string, follow bool, tail int64, since string) error {
+	cs, err := kc.Clientset()
+	if err != nil {
+		return err
+	}
+
+	opts, err := podLogOptions(container, follow, tail, since)
+	if err != nil {
+		return err
+	}
+
+	stream, err := openPodLogStream(context.Background(), cs, namespace, podName, opts)
 	if err != nil {
 		return fmt.Errorf("failed to open log stream for pod %q: %w", podName, err)
 	}
@@ -121,6 +137,79 @@ func StreamLogs(kc *kube.KubeClient, namespace, podName, container string, follo
 
 	_, err = io.Copy(os.Stdout, stream)
 	return err
+}
+
+func StreamLogsMulti(ctx context.Context, kc *kube.KubeClient, namespace string, podNames []string, container string, follow bool, tail int64, since string, out io.Writer) error {
+	if len(podNames) == 0 {
+		return nil
+	}
+
+	cs, err := kc.Clientset()
+	if err != nil {
+		return err
+	}
+
+	opts, err := podLogOptions(container, follow, tail, since)
+	if err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	var writeMu sync.Mutex
+	var errMu sync.Mutex
+	var firstErr error
+
+	setErr := func(e error) {
+		errMu.Lock()
+		defer errMu.Unlock()
+		if firstErr == nil {
+			firstErr = e
+		}
+	}
+
+	for _, name := range podNames {
+		podName := name
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			stream, err := openPodLogStream(ctx, cs, namespace, podName, opts)
+			if err != nil {
+				setErr(fmt.Errorf("failed to open log stream for pod %q: %w", podName, err))
+				return
+			}
+			defer stream.Close()
+
+			scanner := bufio.NewScanner(stream)
+			buf := make([]byte, 64*1024)
+			scanner.Buffer(buf, 1024*1024)
+
+			for scanner.Scan() {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				line := scanner.Text()
+				writeMu.Lock()
+				_, werr := fmt.Fprintf(out, "[%s] %s\n", podName, line)
+				writeMu.Unlock()
+				if werr != nil {
+					setErr(werr)
+					return
+				}
+			}
+			if err := scanner.Err(); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				setErr(fmt.Errorf("reading logs for pod %q: %w", podName, err))
+			}
+		}()
+	}
+
+	wg.Wait()
+	return firstErr
 }
 
 func FindMatchingPods(kc *kube.KubeClient, namespace, query string) ([]string, error) {

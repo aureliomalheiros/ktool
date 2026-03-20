@@ -2,6 +2,7 @@ package logs
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -174,6 +175,79 @@ func TestStreamLogs(t *testing.T) {
 
 	if !strings.Contains(out, "line1") || !strings.Contains(out, "line3") {
 		t.Errorf("expected log content in output, got: %q", out)
+	}
+}
+
+func newFakePodServerWithLogs(t *testing.T, podLogs map[string]string) *httptest.Server {
+	t.Helper()
+	names := make([]string, 0, len(podLogs))
+	for p := range podLogs {
+		names = append(names, p)
+	}
+	items := make([]string, 0, len(names))
+	for _, p := range names {
+		items = append(items, fmt.Sprintf(`{
+			"metadata": {"name": %q, "creationTimestamp": "2024-01-01T00:00:00Z"},
+			"spec": {"containers": [{"name": "main"}]},
+			"status": {"phase": "Running", "containerStatuses": [{"ready": true, "restartCount": 0}]}
+		}`, p))
+	}
+	listBody := fmt.Sprintf(
+		`{"apiVersion":"v1","kind":"PodList","metadata":{"resourceVersion":"1"},"items":[%s]}`,
+		strings.Join(items, ","),
+	)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/namespaces/test-ns/pods", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, listBody)
+	})
+	for pod, content := range podLogs {
+		path := "/api/v1/namespaces/test-ns/pods/" + pod + "/log"
+		content := content
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, content)
+		})
+	}
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestStreamLogsMulti(t *testing.T) {
+	podLogs := map[string]string{
+		"pod-a": "alpha-one\nalpha-two\n",
+		"pod-b": "beta-one\n",
+	}
+	server := newFakePodServerWithLogs(t, podLogs)
+	kc := newTestKubeClient(t, server.URL)
+
+	pods := []string{"pod-a", "pod-b"}
+	var buf bytes.Buffer
+	err := StreamLogsMulti(context.Background(), kc, "test-ns", pods, "", false, 50, "", &buf)
+	if err != nil {
+		t.Fatalf("StreamLogsMulti failed: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "[pod-a] alpha-one") || !strings.Contains(out, "[pod-a] alpha-two") {
+		t.Errorf("expected pod-a prefixed lines in output, got: %q", out)
+	}
+	if !strings.Contains(out, "[pod-b] beta-one") {
+		t.Errorf("expected pod-b prefixed lines in output, got: %q", out)
+	}
+}
+
+func TestStreamLogsMulti_EmptyPods(t *testing.T) {
+	server := httptest.NewServer(http.NewServeMux())
+	t.Cleanup(server.Close)
+	kc := newTestKubeClient(t, server.URL)
+
+	err := StreamLogsMulti(context.Background(), kc, "test-ns", nil, "", false, 50, "", io.Discard)
+	if err != nil {
+		t.Fatalf("expected nil error for empty pod list, got %v", err)
 	}
 }
 

@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/aureliomalheiros/ktool/internal/kube"
 	"github.com/aureliomalheiros/ktool/internal/logs"
@@ -12,6 +15,7 @@ import (
 
 var (
 	logsFollow    bool
+	logsAllPods   bool
 	logsContainer string
 	logsTail      int64
 	logsSince     string
@@ -24,7 +28,11 @@ var logsCmd = &cobra.Command{
 	Long: `View logs from a pod in the current namespace.
 
 Without a pod name, opens an interactive fzf menu to select a pod (requires fzf).
-With a pod name, streams logs directly.`,
+With a pod name, streams logs directly.
+
+When several pods match the name prefix, use --all (-A) to stream logs from all matching
+pods at once (Stern-style), with each line prefixed by [pod-name]. Without --all, fzf
+is used to pick one pod when fzf is installed.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		kc, err := kube.NewKubeClient()
 		if err != nil {
@@ -50,6 +58,19 @@ With a pod name, streams logs directly.`,
 			case 1:
 				podName = matches[0]
 			default:
+				if logsAllPods {
+					ctx := context.Background()
+					if logsFollow {
+						var stop context.CancelFunc
+						ctx, stop = signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+						defer stop()
+					}
+					if err := logs.StreamLogsMulti(ctx, kc, namespace, matches, logsContainer, logsFollow, logsTail, logsSince, os.Stdout); err != nil {
+						fmt.Printf("Error streaming logs: %v\n", err)
+						os.Exit(1)
+					}
+					return
+				}
 				if logs.IsFzfInstalled() {
 					selected, err := logs.SelectPodInteractive(matches)
 					if err != nil {
@@ -105,6 +126,7 @@ With a pod name, streams logs directly.`,
 
 func init() {
 	logsCmd.Flags().BoolVarP(&logsFollow, "follow", "f", false, "Follow log output")
+	logsCmd.Flags().BoolVarP(&logsAllPods, "all", "A", false, "When multiple pods match, stream logs from all of them (Stern-style)")
 	logsCmd.Flags().StringVarP(&logsContainer, "container", "c", "", "Container name (for multi-container pods)")
 	logsCmd.Flags().Int64Var(&logsTail, "tail", 50, "Number of lines from the end of the logs (-1 for all)")
 	logsCmd.Flags().StringVar(&logsSince, "since", "", "Show logs since duration (e.g. 1h, 30m, 5s)")
